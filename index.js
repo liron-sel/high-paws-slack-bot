@@ -106,7 +106,7 @@ app.command("/highpaws", async ({ command, ack, respond }) => {
 
     await respond({
       response_type: "ephemeral",
-      text: `🐕‍🦺 *All High-Paws* 🐾 (showing ${rows.length})\n${lines.join("\n")}`,
+      text: `*All High-Paws* 🐾 (showing ${rows.length})\n${lines.join("\n")}`,
     });
     return;
   }
@@ -140,7 +140,7 @@ app.command("/highpaws", async ({ command, ack, respond }) => {
 
   await respond({
     response_type: "ephemeral",
-    text: `🐕‍🦺 *Top ${rows.length} High-Paws* 🐾\n${lines.join("\n")}`,
+    text: `*Top ${rows.length} High-Paws* 🐾\n${lines.join("\n")}`,
   });
 });
 

@@ -3,8 +3,10 @@ import Database from "better-sqlite3";
 
 const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 
+// Persist DB on Render disk
 const DB_PATH = process.env.DB_PATH || "/data/high-paws.sqlite";
 const db = new Database(DB_PATH);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS scores (
     user_id TEXT PRIMARY KEY,
@@ -21,14 +23,26 @@ db.exec(`
   );
 `);
 
-const app = new App({
-  token: process.env.SLACK_BOT_TOKEN,
-  appToken: process.env.SLACK_APP_TOKEN,
-  socketMode: true,
-});
-
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getScore(userId) {
+  const row = db.prepare("SELECT score FROM scores WHERE user_id=?").get(userId);
+  return row?.score ?? 0;
+}
+
+function getTop(limit) {
+  return db
+    .prepare(
+      `
+    SELECT user_id, score
+    FROM scores
+    ORDER BY score DESC
+    LIMIT ?
+  `
+    )
+    .all(limit);
 }
 
 function alreadyCounted(eventId) {
@@ -48,33 +62,92 @@ function incrementScore(userId) {
   return next;
 }
 
-app.message(async ({ message, client }) => {
-console.log("EVENT message:", {
-  channel: message.channel,
-  user: message.user,
-  text: message.text,
-  ts: message.ts,
+const app = new App({
+  token: process.env.SLACK_BOT_TOKEN, // xoxb-...
+  appToken: process.env.SLACK_APP_TOKEN, // xapp-...
+  socketMode: true,
 });
 
+app.message(async ({ message, client }) => {
+  // Helpful runtime visibility in Render logs
+  console.log("EVENT message:", {
+    channel: message.channel,
+    user: message.user,
+    text: message.text,
+    ts: message.ts,
+  });
 
   if (!message.text || message.subtype) return;
 
-  // Only count in the ++ channel
+  // Only operate inside the High-Paws channel
   if (HIGH_PAWS_CHANNEL_ID && message.channel !== HIGH_PAWS_CHANNEL_ID) return;
 
+  // ---- High-Paws commands (message-based) ----
+  // Supported:
+  //   paws me
+  //   paws top 3
+  //   paws top 10
+  //   paws all
+  const raw = message.text.trim();
+  const lower = raw.toLowerCase();
+
+  const isPawsCommand =
+    lower === "paws me" || lower === "paws all" || lower.startsWith("paws top ");
+
+  if (isPawsCommand) {
+    const reply = async (t) =>
+      client.chat.postMessage({
+        channel: message.channel,
+        thread_ts: message.ts,
+        text: t,
+      });
+
+    if (lower === "paws me") {
+      const score = getScore(message.user);
+      await reply(`🐾 You have *${score}* high-paws!`);
+      return;
+    }
+
+    let limit = 3;
+
+    if (lower === "paws all") {
+      limit = 50; // safety cap; add pagination later if you want
+    } else {
+      // "paws top 10"
+      const n = parseInt(lower.split(" ")[2], 10);
+      if (!isNaN(n) && n > 0) limit = Math.min(n, 50);
+    }
+
+    const rows = getTop(limit);
+    if (rows.length === 0) {
+      await reply("🐾 No high-paws yet");
+      return;
+    }
+
+    const lines = rows.map(
+      (r, i) => `${i + 1}. <@${r.user_id}> — *${r.score}* 🐾`
+    );
+
+    await reply(`🐕‍🦺 *Top ${rows.length} High-Paws* 🐾\n${lines.join("\n")}`);
+    return;
+  }
+  // ---- end commands ----
+
+  // ---- High-Paws awarding ----
   const giverId = message.user;
   const text = message.text;
 
-  // Must include a ++ token somewhere
+  // Must include a "++"
   if (!text.includes("++")) return;
 
   // Extract mentioned users like <@U123>
-  const mentioned = [...text.matchAll(/<@([A-Z0-9]+)>/g)].map(m => m[1]);
+  const mentioned = [...text.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => m[1]);
   if (mentioned.length === 0) return;
 
-  // Award exactly +1 per mentioned user (in this message)
   for (const receiverId of mentioned) {
-   // if (receiverId === giverId) continue; // no self-awards
+    // NOTE: you temporarily allowed self-awards for testing by commenting this out.
+    // Re-enable later:
+    // if (receiverId === giverId) continue;
 
     const eventId = `${message.ts}:${receiverId}`;
     if (alreadyCounted(eventId)) continue;
@@ -94,64 +167,7 @@ console.log("EVENT message:", {
   }
 });
 
-app.command("/kudos", async ({ command, ack, respond }) => {
-  await ack();
-
-  const text = command.text.trim();
-
-  // Default: top 3
-  let limit = 3;
-
-  if (text.startsWith("top")) {
-    const n = parseInt(text.split(" ")[1], 10);
-    if (!isNaN(n)) limit = n;
-  }
-
-  if (text === "all") {
-    limit = 100; // safety cap
-  }
-
-  if (text === "me") {
-    const row = db
-      .prepare("SELECT score FROM scores WHERE user_id=?")
-      .get(command.user_id);
-
-    const score = row?.score ?? 0;
-
-    await respond({
-      response_type: "ephemeral",
-      text:'🐾 You have *${score}* high-paws!'
-    });
-    return;
-  }
-
-  const rows = db.prepare(`
-    SELECT user_id, score
-    FROM scores
-    ORDER BY score DESC
-    LIMIT ?
-  `).all(limit);
-
-  if (rows.length === 0) {
-    await respond({
-      response_type: "ephemeral",
-      text: "No ++ recorded yet.",
-    });
-    return;
-  }
-
-  const lines = rows.map(
-    (r, i) => `${i + 1}. <@${r.user_id}> — *${r.score}* ++ 🐾`
-  );
-
-  await respond({
-    response_type: "ephemeral",
-    text: `🏆 *Top ${rows.length}*\n` + lines.join("\n"),
-  });
-});
-
-
 (async () => {
   await app.start();
-  console.log("++ bot running");
+  console.log("🐾 High-Paws bot running");
 })();

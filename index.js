@@ -172,7 +172,7 @@ app.message(async ({ message, client }) => {
   for (const receiverId of mentioned) {
     // NOTE: you temporarily allowed self-awards for testing by commenting this out.
     // Re-enable later:
-    // if (receiverId === giverId) continue;
+     if (receiverId === giverId) continue;
 
     const eventId = `${message.ts}:${receiverId}`;
     if (alreadyCounted(eventId)) continue;

@@ -68,6 +68,78 @@ const app = new App({
   socketMode: true,
 });
 
+// Slash command: /highpaws [me|all|top 3]
+app.command("/highpaws", async ({ command, ack, respond }) => {
+  // Always ack immediately to avoid dispatch_failed/timeouts
+  await ack();
+
+  const text = (command.text || "").trim().toLowerCase();
+
+  // /highpaws me
+  if (text === "me") {
+    const score = getScore(command.user_id);
+    await respond({
+      response_type: "ephemeral",
+      text: `🐾 You have *${score}* high-paws!`,
+    });
+    return;
+  }
+
+  // /highpaws all  -> show up to 50 (safety cap)
+  if (text === "all") {
+    const rows = getTop(50);
+    if (rows.length === 0) {
+      await respond({
+        response_type: "ephemeral",
+        text: "🐾 No high-paws yet",
+      });
+      return;
+    }
+
+    const lines = rows.map(
+      (r, i) => `${i + 1}. <@${r.user_id}> — *${r.score}* 🐾`
+    );
+
+    await respond({
+      response_type: "ephemeral",
+      text: `🐕‍🦺 *All High-Paws* 🐾 (showing ${rows.length})\n${lines.join("\n")}`,
+    });
+    return;
+  }
+
+  // Default: top 3 (supports "/highpaws" or "/highpaws top 3")
+  let limit = 3;
+  if (text.startsWith("top")) {
+    const n = parseInt(text.split(/\s+/)[1], 10);
+    if (!isNaN(n) && n > 0) limit = Math.min(n, 50);
+  } else if (text !== "") {
+    // Unknown arg
+    await respond({
+      response_type: "ephemeral",
+      text: "Try `/highpaws me`, `/highpaws top 3`, or `/highpaws all`.",
+    });
+    return;
+  }
+
+  const rows = getTop(limit);
+  if (rows.length === 0) {
+    await respond({
+      response_type: "ephemeral",
+      text: "🐾 No high-paws yet",
+    });
+    return;
+  }
+
+  const lines = rows.map(
+    (r, i) => `${i + 1}. <@${r.user_id}> — *${r.score}* 🐾`
+  );
+
+  await respond({
+    response_type: "ephemeral",
+    text: `🐕‍🦺 *Top ${rows.length} High-Paws* 🐾\n${lines.join("\n")}`,
+  });
+});
+
 app.message(async ({ message, client }) => {
   // Helpful runtime visibility in Render logs
   console.log("EVENT message:", {
@@ -81,57 +153,6 @@ app.message(async ({ message, client }) => {
 
   // Only operate inside the High-Paws channel
   if (HIGH_PAWS_CHANNEL_ID && message.channel !== HIGH_PAWS_CHANNEL_ID) return;
-
-  // ---- High-Paws commands (message-based) ----
-  // Supported:
-  //   paws me
-  //   paws top 3
-  //   paws top 10
-  //   paws all
-  const raw = message.text.trim();
-  const lower = raw.toLowerCase();
-
-  const isPawsCommand =
-    lower === "paws me" || lower === "paws all" || lower.startsWith("paws top ");
-
-  if (isPawsCommand) {
-    const reply = async (t) =>
-      client.chat.postMessage({
-        channel: message.channel,
-        thread_ts: message.ts,
-        text: t,
-      });
-
-    if (lower === "paws me") {
-      const score = getScore(message.user);
-      await reply(`🐾 You have *${score}* high-paws!`);
-      return;
-    }
-
-    let limit = 3;
-
-    if (lower === "paws all") {
-      limit = 50; // safety cap; add pagination later if you want
-    } else {
-      // "paws top 10"
-      const n = parseInt(lower.split(" ")[2], 10);
-      if (!isNaN(n) && n > 0) limit = Math.min(n, 50);
-    }
-
-    const rows = getTop(limit);
-    if (rows.length === 0) {
-      await reply("🐾 No high-paws yet");
-      return;
-    }
-
-    const lines = rows.map(
-      (r, i) => `${i + 1}. <@${r.user_id}> — *${r.score}* 🐾`
-    );
-
-    await reply(`🐕‍🦺 *Top ${rows.length} High-Paws* 🐾\n${lines.join("\n")}`);
-    return;
-  }
-  // ---- end commands ----
 
   // ---- High-Paws awarding ----
   const giverId = message.user;
@@ -155,7 +176,7 @@ app.message(async ({ message, client }) => {
     db.prepare(`
       INSERT INTO events (id, giver_id, receiver_id, channel_id, message_ts, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(eventId, giverId, receiverId, message.channel, message.ts, nowIso());
+    `).run(receiverId ? eventId : eventId, giverId, receiverId, message.channel, message.ts, nowIso());
 
     const total = incrementScore(receiverId);
 

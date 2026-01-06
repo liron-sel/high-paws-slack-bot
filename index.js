@@ -1,11 +1,12 @@
+import fs from "node:fs";
 import { App } from "@slack/bolt";
 import Database from "better-sqlite3";
 
 const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 
 // Persist DB on Render disk
-const DB_PATH = process.env.DB_PATH || "/data/high-paws.sqlite";
-const db = new Database(DB_PATH);
+console.log("🐾 DB_PATH =", DB_PATH);
+console.log("🐾 DB exists?", fs.existsSync(DB_PATH));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS scores (

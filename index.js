@@ -1,9 +1,10 @@
 import { App } from "@slack/bolt";
 import Database from "better-sqlite3";
 
-const PLUSPLUS_CHANNEL_ID = process.env.PLUSPLUS_CHANNEL_ID;
+const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 
-const db = new Database("plusplus.sqlite");
+const DB_PATH = process.env.DB_PATH || "/data/high-paws.sqlite";
+const db = new Database(DB_PATH);
 db.exec(`
   CREATE TABLE IF NOT EXISTS scores (
     user_id TEXT PRIMARY KEY,
@@ -48,10 +49,18 @@ function incrementScore(userId) {
 }
 
 app.message(async ({ message, client }) => {
+console.log("EVENT message:", {
+  channel: message.channel,
+  user: message.user,
+  text: message.text,
+  ts: message.ts,
+});
+
+
   if (!message.text || message.subtype) return;
 
   // Only count in the ++ channel
-  if (PLUSPLUS_CHANNEL_ID && message.channel !== PLUSPLUS_CHANNEL_ID) return;
+  if (HIGH_PAWS_CHANNEL_ID && message.channel !== HIGH_PAWS_CHANNEL_ID) return;
 
   const giverId = message.user;
   const text = message.text;

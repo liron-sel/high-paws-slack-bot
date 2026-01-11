@@ -153,40 +153,44 @@ app.message(async ({ message, client }) => {
     ts: message.ts,
   });
 
-  if (!message.text || message.subtype) return;
+  if (!message.text) return;
+
+  const isEdited =
+    message.subtype === "message_changed" && message.message && message.message.text;
+  if (message.subtype && !isEdited) return;
 
   // Only operate inside the High-Paws channel
   if (HIGH_PAWS_CHANNEL_ID && message.channel !== HIGH_PAWS_CHANNEL_ID) return;
 
   // ---- High-Paws awarding ----
-  const giverId = message.user;
-  const text = message.text;
+  const giverId = isEdited ? message.message.user : message.user;
+  const text = isEdited ? message.message.text : message.text;
+  const messageTs = isEdited ? message.message.ts : message.ts;
 
-  // Must include a "++"
-  if (!text.includes("++")) return;
+  // Only count when ++ is directly before/after a mention (optional space).
+  const matchedMentions = [
+    ...text.matchAll(/(?:\+\+\s*<@([A-Z0-9]+)>|<@([A-Z0-9]+)>\s*\+\+)/g),
+  ].map((m) => m[1] || m[2]);
+  if (matchedMentions.length === 0) return;
 
-  // Extract mentioned users like <@U123>
-  const mentioned = [...text.matchAll(/<@([A-Z0-9]+)>/g)].map((m) => m[1]);
-  if (mentioned.length === 0) return;
-
-  for (const receiverId of mentioned) {
+  for (const receiverId of matchedMentions) {
     // NOTE: you temporarily allowed self-awards for testing by commenting this out.
     // Re-enable later:
      if (receiverId === giverId) continue;
 
-    const eventId = `${message.ts}:${receiverId}`;
+    const eventId = `${messageTs}:${receiverId}`;
     if (alreadyCounted(eventId)) continue;
 
     db.prepare(`
       INSERT INTO events (id, giver_id, receiver_id, channel_id, message_ts, created_at)
       VALUES (?, ?, ?, ?, ?, ?)
-    `).run(receiverId ? eventId : eventId, giverId, receiverId, message.channel, message.ts, nowIso());
+    `).run(receiverId ? eventId : eventId, giverId, receiverId, message.channel, messageTs, nowIso());
 
     const total = incrementScore(receiverId);
 
     await client.chat.postMessage({
       channel: message.channel,
-      thread_ts: message.ts,
+      thread_ts: messageTs,
       text: `🐾 High-paws for <@${receiverId}>! Total paws: *${total}* :bear:`,
     });
   }

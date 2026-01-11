@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 
 const DB_PATH = "/data/high-paws.sqlite";
 const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
+const HIGH_PAWS_ADMIN_USER_ID = process.env.HIGH_PAWS_ADMIN_USER_ID;
 
 // Persist DB on Render disk
 // ✅ THEN LOG
@@ -64,6 +65,24 @@ function incrementScore(userId) {
   `).run(userId, next, nowIso());
 
   return next;
+}
+
+function decrementScore(userId) {
+  const row = db.prepare("SELECT score FROM scores WHERE user_id=?").get(userId);
+  const next = Math.max((row?.score ?? 0) - 1, 0);
+
+  db.prepare(`
+    INSERT INTO scores (user_id, score, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET score=excluded.score, updated_at=excluded.updated_at
+  `).run(userId, next, nowIso());
+
+  return next;
+}
+
+function getFirstMention(text) {
+  const match = text.match(/<@([A-Z0-9]+)>/);
+  return match ? match[1] : null;
 }
 
 const app = new App({
@@ -194,6 +213,44 @@ app.message(async ({ message, client }) => {
       text: `🐾 High-paws for <@${receiverId}>! Total paws: *${total}* :bear:`,
     });
   }
+});
+
+app.event("reaction_added", async ({ event, client }) => {
+  if (event.reaction !== "point_down") return;
+  if (!HIGH_PAWS_ADMIN_USER_ID || event.user !== HIGH_PAWS_ADMIN_USER_ID) return;
+  if (HIGH_PAWS_CHANNEL_ID && event.item.channel !== HIGH_PAWS_CHANNEL_ID) return;
+  if (event.item.type !== "message") return;
+
+  const history = await client.conversations.history({
+    channel: event.item.channel,
+    latest: event.item.ts,
+    inclusive: true,
+    limit: 1,
+  });
+
+  const target = history.messages?.[0];
+  if (!target || target.subtype !== "bot_message") return;
+  if (!target.text) return;
+
+  const receiverId = getFirstMention(target.text);
+  if (!receiverId) return;
+
+  const eventId = `undo:${event.item.ts}:${receiverId}`;
+  if (alreadyCounted(eventId)) return;
+
+  db.prepare(`
+    INSERT INTO events (id, giver_id, receiver_id, channel_id, message_ts, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(eventId, event.user, receiverId, event.item.channel, event.item.ts, nowIso());
+
+  const total = decrementScore(receiverId);
+  const threadTs = target.thread_ts || target.ts;
+
+  await client.chat.postMessage({
+    channel: event.item.channel,
+    thread_ts: threadTs,
+    text: `Tiny correction: adjusted paws. New total: *${total}*.`,
+  });
 });
 
 (async () => {

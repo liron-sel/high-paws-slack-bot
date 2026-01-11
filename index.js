@@ -251,7 +251,7 @@ app.event("reaction_added", async ({ event, client }) => {
   await client.chat.postMessage({
     channel: event.item.channel,
     thread_ts: threadTs,
-    text: `Tiny correction: adjusted paws. New total: *${total}*.`,
+    text: `Tiny correction for <@${receiverId}>: adjusted paws, Total paws: *${total}* :bear:`,
   });
 });
 

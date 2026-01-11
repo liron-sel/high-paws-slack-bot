@@ -216,6 +216,7 @@ app.message(async ({ message, client }) => {
 });
 
 app.event("reaction_added", async ({ event, client }) => {
+  console.log("EVENT reaction_added:", event);
   if (event.reaction !== "point_down") return;
   if (!HIGH_PAWS_ADMIN_USER_ID || event.user !== HIGH_PAWS_ADMIN_USER_ID) return;
   if (HIGH_PAWS_CHANNEL_ID && event.item.channel !== HIGH_PAWS_CHANNEL_ID) return;
@@ -229,6 +230,7 @@ app.event("reaction_added", async ({ event, client }) => {
   });
 
   const target = history.messages?.[0];
+  console.log("reaction target:", target);
   if (!target || target.subtype !== "bot_message") return;
   if (!target.text) return;
 

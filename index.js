@@ -222,16 +222,16 @@ app.event("reaction_added", async ({ event, client }) => {
   if (HIGH_PAWS_CHANNEL_ID && event.item.channel !== HIGH_PAWS_CHANNEL_ID) return;
   if (event.item.type !== "message") return;
 
-  const history = await client.conversations.history({
+  const replies = await client.conversations.replies({
     channel: event.item.channel,
-    latest: event.item.ts,
+    ts: event.item.ts,
     inclusive: true,
     limit: 1,
   });
 
-  const target = history.messages?.[0];
+  const target = replies.messages?.[0];
   console.log("reaction target:", target);
-  if (!target || target.subtype !== "bot_message") return;
+  if (!target || (!target.bot_id && target.subtype !== "bot_message")) return;
   if (!target.text) return;
 
   const receiverId = getFirstMention(target.text);

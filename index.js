@@ -176,14 +176,15 @@ app.message(async ({ message, client }) => {
 
   const isEdited =
     message.subtype === "message_changed" && message.message && message.message.text;
-  if (message.subtype && !isEdited) return;
+  const isFileShare = message.subtype === "file_share";
+  if (message.subtype && !isEdited && !isFileShare) return;
 
   // Only operate inside the High-Paws channel
   if (HIGH_PAWS_CHANNEL_ID && message.channel !== HIGH_PAWS_CHANNEL_ID) return;
 
   // ---- High-Paws awarding ----
   const giverId = isEdited ? message.message.user : message.user;
-  const text = isEdited ? message.message.text : message.text;
+  const text = isEdited ? message.message.text : (message.text || "");
   const messageTs = isEdited ? message.message.ts : message.ts;
 
   // Only count when ++ is directly before/after a mention (optional space).

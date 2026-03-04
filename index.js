@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 const DB_PATH = "/data/high-paws.sqlite";
 const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 const HIGH_PAWS_ADMIN_USER_ID = process.env.HIGH_PAWS_ADMIN_USER_ID;
+const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000;
+const channelMembersCache = new Map();
 
 // Persist DB on Render disk
 // ✅ THEN LOG
@@ -67,6 +69,19 @@ function incrementScore(userId) {
   return next;
 }
 
+function incrementScoreBy(userId, amount) {
+  const row = db.prepare("SELECT score FROM scores WHERE user_id=?").get(userId);
+  const next = (row?.score ?? 0) + amount;
+
+  db.prepare(`
+    INSERT INTO scores (user_id, score, updated_at)
+    VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET score=excluded.score, updated_at=excluded.updated_at
+  `).run(userId, next, nowIso());
+
+  return next;
+}
+
 function decrementScore(userId) {
   const row = db.prepare("SELECT score FROM scores WHERE user_id=?").get(userId);
   const next = Math.max((row?.score ?? 0) - 1, 0);
@@ -83,6 +98,33 @@ function decrementScore(userId) {
 function getFirstMention(text) {
   const match = text.match(/<@([A-Z0-9]+)>/);
   return match ? match[1] : null;
+}
+
+async function getChannelMembers(client, channelId) {
+  const now = Date.now();
+  const cached = channelMembersCache.get(channelId);
+  if (cached && cached.expiresAt > now) return cached.members;
+
+  const members = new Set();
+  let cursor;
+
+  do {
+    const resp = await client.conversations.members({
+      channel: channelId,
+      cursor,
+      limit: 200,
+    });
+
+    for (const memberId of resp.members || []) members.add(memberId);
+    cursor = resp.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+
+  channelMembersCache.set(channelId, {
+    members,
+    expiresAt: now + CHANNEL_MEMBERS_CACHE_TTL_MS,
+  });
+
+  return members;
 }
 
 const app = new App({
@@ -187,16 +229,29 @@ app.message(async ({ message, client }) => {
   const text = isEdited ? message.message.text : (message.text || "");
   const messageTs = isEdited ? message.message.ts : message.ts;
 
-  // Only count when ++ is directly before/after a mention (optional space).
-  const matchedMentions = [
-    ...text.matchAll(/(?:\+\+\s*<@([A-Z0-9]+)>|<@([A-Z0-9]+)>\s*\+\+)/g),
-  ].map((m) => m[1] || m[2]);
-  if (matchedMentions.length === 0) return;
+  // Count when one or more + are directly before/after a mention (optional space).
+  // Award count is capped at 5 paws per mention match.
+  const awards = [...text.matchAll(/(?:([+]+)\s*<@([A-Z0-9]+)>|<@([A-Z0-9]+)>\s*([+]+))/g)]
+    .map((m) => {
+      const plusRun = m[1] || m[4];
+      const receiverId = m[2] || m[3];
+      return { receiverId, paws: Math.min(plusRun.length, 5) };
+    });
+  if (awards.length === 0) return;
 
-  for (const receiverId of matchedMentions) {
+  let channelMembers;
+  try {
+    channelMembers = await getChannelMembers(client, message.channel);
+  } catch (error) {
+    console.error("Failed to fetch channel members; skipping awards:", error);
+    return;
+  }
+
+  for (const { receiverId, paws } of awards) {
     // NOTE: you temporarily allowed self-awards for testing by commenting this out.
     // Re-enable later:
      if (receiverId === giverId) continue;
+    if (!channelMembers.has(receiverId)) continue;
 
     const eventId = `${messageTs}:${receiverId}`;
     if (alreadyCounted(eventId)) continue;
@@ -206,12 +261,12 @@ app.message(async ({ message, client }) => {
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(receiverId ? eventId : eventId, giverId, receiverId, message.channel, messageTs, nowIso());
 
-    const total = incrementScore(receiverId);
+    const total = incrementScoreBy(receiverId, paws);
 
     await client.chat.postMessage({
       channel: message.channel,
       thread_ts: messageTs,
-      text: `🐾 High-paws for <@${receiverId}>! Total paws: *${total}* :bear:`,
+      text: `🐾 Awarded *${paws}* paw${paws === 1 ? "" : "s"} to <@${receiverId}>! Total paws: *${total}* :bear:`,
     });
   }
 });

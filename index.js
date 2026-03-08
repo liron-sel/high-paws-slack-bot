@@ -5,6 +5,8 @@ import Database from "better-sqlite3";
 const DB_PATH = "/data/high-paws.sqlite";
 const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 const HIGH_PAWS_ADMIN_USER_ID = process.env.HIGH_PAWS_ADMIN_USER_ID;
+const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000;
+const channelMembersCache = new Map();
 
 // Persist DB on Render disk
 // ✅ THEN LOG
@@ -50,6 +52,20 @@ function getTop(limit) {
     .all(limit);
 }
 
+function getTopForMemberSet(memberSet, limit) {
+  const rows = db
+    .prepare(
+      `
+    SELECT user_id, score
+    FROM scores
+    ORDER BY score DESC
+  `
+    )
+    .all();
+
+  return rows.filter((r) => memberSet.has(r.user_id)).slice(0, limit);
+}
+
 function alreadyCounted(eventId) {
   return !!db.prepare("SELECT 1 FROM events WHERE id=?").get(eventId);
 }
@@ -85,6 +101,33 @@ function getFirstMention(text) {
   return match ? match[1] : null;
 }
 
+async function getChannelMembers(client, channelId) {
+  const now = Date.now();
+  const cached = channelMembersCache.get(channelId);
+  if (cached && cached.expiresAt > now) return cached.members;
+
+  const members = new Set();
+  let cursor;
+
+  do {
+    const resp = await client.conversations.members({
+      channel: channelId,
+      cursor,
+      limit: 200,
+    });
+
+    for (const memberId of resp.members || []) members.add(memberId);
+    cursor = resp.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+
+  channelMembersCache.set(channelId, {
+    members,
+    expiresAt: now + CHANNEL_MEMBERS_CACHE_TTL_MS,
+  });
+
+  return members;
+}
+
 const app = new App({
   token: process.env.SLACK_BOT_TOKEN, // xoxb-...
   appToken: process.env.SLACK_APP_TOKEN, // xapp-...
@@ -92,14 +135,32 @@ const app = new App({
 });
 
 // Slash command: /highpaws [me|all|top 3]
-app.command("/highpaws", async ({ command, ack, respond }) => {
+app.command("/highpaws", async ({ command, ack, respond, client }) => {
   // Always ack immediately to avoid dispatch_failed/timeouts
   await ack();
 
   const text = (command.text || "").trim().toLowerCase();
+  let channelMembers;
+  try {
+    channelMembers = await getChannelMembers(client, command.channel_id);
+  } catch (error) {
+    console.error("Failed to fetch channel members for /highpaws:", error);
+    await respond({
+      response_type: "ephemeral",
+      text: "I couldn't read channel members right now. Please try again.",
+    });
+    return;
+  }
 
   // /highpaws me
   if (text === "me") {
+    if (!channelMembers.has(command.user_id)) {
+      await respond({
+        response_type: "ephemeral",
+        text: "You're not a member of this channel, so no score is shown here.",
+      });
+      return;
+    }
     const score = getScore(command.user_id);
     await respond({
       response_type: "ephemeral",
@@ -110,7 +171,7 @@ app.command("/highpaws", async ({ command, ack, respond }) => {
 
   // /highpaws all  -> show up to 50 (safety cap)
   if (text === "all") {
-    const rows = getTop(50);
+    const rows = getTopForMemberSet(channelMembers, 50);
     if (rows.length === 0) {
       await respond({
         response_type: "ephemeral",
@@ -144,7 +205,7 @@ app.command("/highpaws", async ({ command, ack, respond }) => {
     return;
   }
 
-  const rows = getTop(limit);
+  const rows = getTopForMemberSet(channelMembers, limit);
   if (rows.length === 0) {
     await respond({
       response_type: "ephemeral",
@@ -193,10 +254,26 @@ app.message(async ({ message, client }) => {
   ].map((m) => m[1] || m[2]);
   if (matchedMentions.length === 0) return;
 
+  let channelMembers;
+  try {
+    channelMembers = await getChannelMembers(client, message.channel);
+  } catch (error) {
+    console.error("Failed to fetch channel members; skipping awards:", error);
+    return;
+  }
+
   for (const receiverId of matchedMentions) {
     // NOTE: you temporarily allowed self-awards for testing by commenting this out.
     // Re-enable later:
      if (receiverId === giverId) continue;
+    if (!channelMembers.has(receiverId)) {
+      console.log("Skipping award: receiver not in channel", {
+        channel: message.channel,
+        receiverId,
+        messageTs,
+      });
+      continue;
+    }
 
     const eventId = `${messageTs}:${receiverId}`;
     if (alreadyCounted(eventId)) continue;

@@ -8,6 +8,9 @@ mention, with an admin-only undo via :point_down: on the bot's award message.
 - One valid `++` award gives exactly 1 paw
 - Edits: Edited messages are eligible for awarding
 - File/image posts: `file_share` messages with caption text are eligible
+- Channel membership rule:
+  - Awards apply only to users who are members of that channel
+  - `/highpaws all` and top views show only members of that channel
 - Undo: Admin reacts :point_down: on the bot award message to decrement 1
 
 ## Environment Variables
@@ -22,6 +25,7 @@ mention, with an admin-only undo via :point_down: on the bot's award message.
   - `reactions:read`
   - `chat:write`
   - `channels:history` or `groups:history`
+  - `channels:read` or `groups:read` (for channel member checks)
 
 ## Notes
 - Undo only works on the specific bot award message you react to.

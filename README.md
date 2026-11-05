@@ -5,6 +5,9 @@ mention, with an admin-only undo via :point_down: on the bot's award message.
 
 ## How It Works
 - Award: `++ <@user>` or `<@user> ++` (space optional)
+- Group award: `@team ++` or `++ @team` gives 1 paw to every member of the
+  Slack user group (the giver is skipped; anyone also mentioned directly still
+  gets just 1 paw)
 - One valid `++` award gives exactly 1 paw
 - Edits: Edited messages are eligible for awarding
 - File/image posts: `file_share` messages with caption text are eligible
@@ -26,6 +29,7 @@ mention, with an admin-only undo via :point_down: on the bot's award message.
   - `chat:write`
   - `channels:history` or `groups:history`
   - `channels:read` or `groups:read` (for channel member checks)
+  - `usergroups:read` (for user group awards)
 
 ## Notes
 - Undo only works on the specific bot award message you react to.

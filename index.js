@@ -7,6 +7,8 @@ const HIGH_PAWS_CHANNEL_ID = process.env.HIGH_PAWS_CHANNEL_ID;
 const HIGH_PAWS_ADMIN_USER_ID = process.env.HIGH_PAWS_ADMIN_USER_ID;
 const CHANNEL_MEMBERS_CACHE_TTL_MS = 60 * 1000;
 const channelMembersCache = new Map();
+const USERGROUP_MEMBERS_CACHE_TTL_MS = 60 * 1000;
+const usergroupMembersCache = new Map();
 
 // Persist DB on Render disk
 // ✅ THEN LOG
@@ -123,6 +125,22 @@ async function getChannelMembers(client, channelId) {
   channelMembersCache.set(channelId, {
     members,
     expiresAt: now + CHANNEL_MEMBERS_CACHE_TTL_MS,
+  });
+
+  return members;
+}
+
+async function getUsergroupMembers(client, usergroupId) {
+  const now = Date.now();
+  const cached = usergroupMembersCache.get(usergroupId);
+  if (cached && cached.expiresAt > now) return cached.members;
+
+  const resp = await client.usergroups.users.list({ usergroup: usergroupId });
+  const members = resp.users || [];
+
+  usergroupMembersCache.set(usergroupId, {
+    members,
+    expiresAt: now + USERGROUP_MEMBERS_CACHE_TTL_MS,
   });
 
   return members;
@@ -249,10 +267,23 @@ app.message(async ({ message, client }) => {
   const messageTs = isEdited ? message.message.ts : message.ts;
 
   // Only count when ++ is directly before/after a mention (optional space).
-  const matchedMentions = [
-    ...text.matchAll(/(?:\+\+\s*<@([A-Z0-9]+)>|<@([A-Z0-9]+)>\s*\+\+)/g),
-  ].map((m) => m[1] || m[2]);
-  if (matchedMentions.length === 0) return;
+  // A mention is a user (<@U123>) or a user group (<!subteam^S123|@team>).
+  const MENTION = String.raw`(?:<@([A-Z0-9]+)>|<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>)`;
+  const mentionRegex = new RegExp(
+    String.raw`\+\+\s*${MENTION}|${MENTION}\s*\+\+`,
+    "g"
+  );
+  const matches = [...text.matchAll(mentionRegex)];
+  if (matches.length === 0) return;
+
+  const userMentions = [];
+  const usergroupMentions = [];
+  for (const m of matches) {
+    const userId = m[1] || m[3];
+    const usergroupId = m[2] || m[4];
+    if (userId) userMentions.push(userId);
+    if (usergroupId) usergroupMentions.push(usergroupId);
+  }
 
   let channelMembers;
   try {
@@ -261,6 +292,22 @@ app.message(async ({ message, client }) => {
     console.error("Failed to fetch channel members; skipping awards:", error);
     return;
   }
+
+  // Expand user groups: every group member gets a paw.
+  const groupMemberIds = [];
+  for (const usergroupId of new Set(usergroupMentions)) {
+    try {
+      groupMemberIds.push(...(await getUsergroupMembers(client, usergroupId)));
+    } catch (error) {
+      console.error("Failed to fetch user group members; skipping group:", {
+        usergroupId,
+        error,
+      });
+    }
+  }
+
+  // Dedupe so someone mentioned directly and via a group gets one paw.
+  const matchedMentions = [...new Set([...userMentions, ...groupMemberIds])];
 
   for (const receiverId of matchedMentions) {
     // NOTE: you temporarily allowed self-awards for testing by commenting this out.
